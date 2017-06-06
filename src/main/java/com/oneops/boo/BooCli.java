@@ -23,6 +23,7 @@ import java.util.Scanner;
 import java.util.UUID;
 
 import com.oneops.api.resource.model.Deployment;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -148,6 +149,14 @@ public class BooCli {
     Option profile = Option.builder("p").longOpt("profile").argName("PROFILE").hasArg()
         .desc("Choose specific profile from ~/.boo/config").build();
 
+    Option playbook = Option.builder().longOpt("playbook").argName("playbook> <platform> <component").hasArg()
+        .desc("Run an Ansible playbook in an environment").build();
+    playbook.setOptionalArg(true);
+    playbook.setArgs(3);
+    
+    Option invfile = Option.builder().longOpt("inventory-file").hasArg()
+        .desc("Save the inventory in the specified file").build();
+    
     options.addOption(help);
     options.addOption(config);
     options.addOption(create);
@@ -168,6 +177,8 @@ public class BooCli {
     options.addOption(comment);
     options.addOption(view);
     options.addOption(profile);
+    options.addOption(playbook);
+    options.addOption(invfile);
   }
 
   static {
@@ -358,6 +369,27 @@ public class BooCli {
         } else if (cmd.getOptionValues("get-ips").length == 2) {
           // if there are two args for get-ips
           getIps2(cmd.getOptionValues("get-ips")[0], cmd.getOptionValues("get-ips")[1]);
+        }
+      } else if (cmd.hasOption("playbook")) {
+        if (!flow.isAssemblyExist()) {
+          System.err.printf(Constants.NOTFOUND_ERROR, config.getYaml().getAssembly().getName());
+        } else {
+          String playbookPath = null;
+          String platformName = null;
+          String componentName = null;
+          String[] optionVals = cmd.getOptionValues("playbook");
+          int numArgs = optionVals.length;
+          
+          playbookPath = optionVals[0];
+          platformName = numArgs > 1 ? optionVals[1] : null;
+          componentName = numArgs > 2 ? optionVals[2] : null;
+          
+          String invFilePath = null;
+          
+          if (cmd.hasOption("inventory-file"))
+            invFilePath = cmd.getOptionValue("inventory-file");
+            
+          runPlaybook(playbookPath, invFilePath, platformName, componentName);
         }
       } else if (cmd.hasOption("retry")) {
         this.retryDeployment();
@@ -567,6 +599,41 @@ public class BooCli {
     try {
       return flow.printIps(platformName, componentName);
     } catch (OneOpsClientAPIException e) {
+      e.printStackTrace();
+    }
+    return null;
+  }
+
+  /**
+   * Run an Ansible playbook.
+   *
+   * @param playbookPath the path to the Ansible playbook.
+   * @param invFilePath the path to save the inventory file to
+   * @param platformName the name of the platform to run against
+   * @param componentName the name of the component to run against
+   * @return the status of the operation
+   */
+  private String runPlaybook(String playbookPath, String invFilePath, String platformName, String componentName) {
+    ArrayList<String> ipList = new ArrayList<String>();
+    String lineSep = System.getProperty("line.separator");
+    
+    Map<String, Object> platforms = flow.getConfig().getYaml().getPlatforms();
+    List<String> computes = booUtils.getComponentOfCompute(this.flow);
+
+    for (String pname : platforms.keySet()) {
+      for (String cname : computes) {
+        String ipString = getIps(pname, cname);
+        String[] allIps = ipString.split(lineSep);
+        if ((allIps != null) && (allIps.length > 0))
+          for (String ipItem : allIps)
+            if (((platformName == null) || platformName.equals(pname)) && ((componentName == null) || (componentName.equals(cname))))
+              ipList.add(ipItem);
+      }
+    }
+    
+    try {
+      return flow.runPlaybook(playbookPath, ipList, invFilePath);
+    } catch (BooException e) {
       e.printStackTrace();
     }
     return null;

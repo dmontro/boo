@@ -13,6 +13,11 @@
  */
 package com.oneops.boo.workflow;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -25,6 +30,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import com.oneops.api.resource.model.Deployment;
+
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +43,7 @@ import com.oneops.api.resource.model.RedundancyConfig;
 import com.oneops.boo.BooCli;
 import com.oneops.boo.ClientConfig;
 import com.oneops.boo.LogUtils;
+import com.oneops.boo.exception.BooException;
 import com.oneops.boo.utils.BooUtils;
 import com.oneops.boo.yaml.Constants;
 import com.oneops.boo.yaml.PlatformBean;
@@ -540,6 +547,88 @@ public class BuildAllPlatforms extends AbstractWorkflow {
     return str.toString();
   }
 
+  /**
+   * Run an Ansible playbook.
+   *
+   * @param playbookPath the path to the playbook
+   * @param ipList the list of IP addresses to use
+   * @param invFilePath the path to save the inventory to (can be null)
+   * @return the string
+   * @throws BooException the one ops client API exception
+   */
+  public String runPlaybook(String playbookPath, List<String> ipList, String invFilePath)
+      throws BooException {
+    String result = "";
+    
+    // Make sure the playbook exists and is readable
+    File playbookFile = new File(playbookPath);
+    
+    if (!playbookFile.exists() || !playbookFile.canRead())
+      throw new BooException("The path [" + playbookPath + "] is not a readable file. The playbook could not be run.");
+    
+    // Create a temporary inventory file
+    File invFile = null;
+    FileWriter invWriter = null;
+    
+    try
+    {
+      invFile = (invFilePath == null) ? File.createTempFile("boo", ".properties") : new File(invFilePath);
+      
+      if (invFile.exists() && !invFile.canWrite())
+        throw new BooException("Unable to write to inventory file [" + invFile.getAbsolutePath() + "]");
+      
+      invWriter = new FileWriter(invFile);
+      
+      for (String ipItem : ipList) {
+        invWriter.write(ipItem);
+        invWriter.write(NEWLINE);
+      }
+      
+      invWriter.close();
+    }
+    catch (IOException ioEx)
+    {
+      throw new BooException("An error occurred while generating the inventory file", ioEx);
+    }
+    finally
+    {
+      if (invWriter != null)
+        try { invWriter.close(); } catch (Exception ex) { }
+    }
+    
+    // Run the Ansible playbook
+    try
+    {
+      System.err.println("\nRunning playbook...");
+      ProcessBuilder procBuilder = new ProcessBuilder("ansible-playbook", "-i", invFile.getAbsolutePath(), playbookPath);
+      procBuilder.redirectErrorStream(true);
+      
+      Process proc = procBuilder.start();
+
+      BufferedReader stdInput = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+
+      try {
+        String outStr = null;
+        while ((outStr = stdInput.readLine()) != null) {
+          System.out.println(outStr);
+        }
+      }
+      finally {
+        stdInput.close();
+      }
+    }
+    catch (Exception ex) {
+      throw new BooException("An error occurred while running ansible-playbook", ex);
+    }
+    finally {
+      // Clean up the inventory file only if a temporary file was used
+      if ((invFile != null) && invFile.exists() && (invFilePath == null))
+        invFile.delete();
+    }
+    
+    return result;
+  }
+  
   /**
    * Update scaling.
    *
